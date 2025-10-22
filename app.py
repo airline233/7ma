@@ -8,6 +8,7 @@ import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
 from scheduler import main as start_scheduler
+import threading
 
 
 # 创建 Flask 应用对象
@@ -69,9 +70,9 @@ def unlock():
     url = "https://newmapi.7mate.cn/api/car/unlock"
     method = "POST"
     body = {
-        "latitude": "34.367498",
+        "latitude": "32.210315",
         "action_type": 1,
-        "longitude": "108.892286"
+        "longitude": "118.731455"
     }
     result = send_request(url, method, body)
     return result
@@ -80,6 +81,53 @@ def md5Hash(text):
     md5 = hashlib.md5()
     md5.update(text.encode('utf-8'))
     return md5.hexdigest()
+
+def carBack(encryptedBackType, encryptedActionType, encryptedLockStatus):
+    url2 = "https://newmapi.7mate.cn/api/order/car_notification"
+    headers = {
+        "Authorization": Authorization,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "parking": "",
+        "remark": "检测到车锁状态为关",
+        "longitude": "118.731455",
+        "back_type": encryptedBackType,
+        "latitude": "32.210315",
+        "action_type": encryptedActionType,
+        "lock_status": encryptedLockStatus
+    }
+
+    options = {
+        "method": "POST",
+        "url": url2,
+        "headers": headers,
+        "json": payload
+    }
+
+    response = requests.post(url2, headers=headers, json=payload)
+    return response.json()
+
+def carBack_main():
+    time.sleep(20)
+    url = "https://newmapi.7mate.cn/api/user/car_authority"
+    headers = {"Authorization": Authorization}
+
+    response = requests.get(url, headers=headers, json=True)
+
+    if response.status_code == 200 and response.json().get("data", {}).get("unauthorized_code") == 6:
+        orderSn = response.json().get("data", {}).get("order", {}).get("order_sn")
+        if orderSn:
+            lockStatus = f"{orderSn}:lock_status:1"
+            encryptedLockStatus = md5Hash(lockStatus)
+            actionType = f"{orderSn}:action_type:3"
+            encryptedActionType = md5Hash(actionType)
+            backType = f"{orderSn}:back_type:2"
+            encryptedBackType = md5Hash(backType)
+            carBack(encryptedBackType, encryptedActionType, encryptedLockStatus)
+            print(f"{datetime.now()}--当前订单：{orderSn}，还车成功（sleep20）")
+            # 记录还车成功到日志
+            app_logger.info(f"--当前订单：{orderSn}，还车成功（sleep20）")
 
 @app.route('/')
 def index():
@@ -107,6 +155,13 @@ def process():
         last_successful_order_time = current_time
         # 记录成功订单到日志
         app_logger.info(f'--成功订单: bike_number={bike_number}, unlock_result={unlock_result["message"]}')
+        
+        
+        task = threading.Thread(target=carBack_main)
+        # 启动线程，这个调用会立即返回
+        task.start()
+        
+        
         return render_template('result.html', data={
             'message': order_result['message'],
             'unlock_result': unlock_result['message'],
@@ -121,6 +176,6 @@ def process():
         })
 
 if __name__ == '__main__':
-    intervalSeconds = 60  # 设置监听的时间间隔，单位为秒
+    intervalSeconds = 45  # 设置监听的时间间隔，单位为秒
     start_scheduler()  # 启动定时任务
     app.run(host='0.0.0.0', port=4321, debug=True)
