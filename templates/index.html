@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,96 +7,221 @@
     <style>
         body {
             font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
             margin: 0;
-            padding: 0;
-            background-color: #f4f4f4;
-        }
-
-        .container {
-            width: 80%;
-            margin: 0 auto;
             padding: 20px;
-            background-color: #fff;
-            border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
-
-        h1 {
-            text-align: center;
+        #qr-reader {
+            width: 500px;
+            height: 400px;
+            max-width: 90vw;
+            border: 2px solid #007bff;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #333;
+        }
+        #qr-reader-results {
+            margin-top: 15px;
+            font-size: 1.1em;
             color: #333;
-            margin-bottom: 20px;
+            word-break: break-all;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            min-width: 300px;
+            max-width: 90vw;
+            text-align: left;
+            min-height: 40px;
         }
-
-        form {
-            text-align: center;
-            margin-top: 20px;
+        #qr-reader-results strong {
+            color: #007bff;
         }
-
-        label {
-            font-weight: bold;
-            color: #555;
-            display: block;
-            margin-bottom: 5px;
-        }
-
-        input {
-            padding: 8px;
-            width: 100%;
-            border: 1px solid #ccc;
-            border-radius: 3px;
-            margin-bottom: 10px;
-        }
-
-        button {
-            padding: 8px 15px;
-            background-color: #007bff;
-            color: #fff;
+        #torch-button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #f0ad4e;
+            color: white;
             border: none;
-            border-radius: 3px;
-            cursor: pointer;
-            width: 100%;
-        }
-
-        .logo {
-            width: 20px;
-            height: 20px;
-            margin-right: 5px;
-        }
-         .announcement {
-            
-            padding: 10px;
             border-radius: 5px;
-            text-align: center;
-            color: #555;
-            width: 80%;
-            margin: 0 auto;
-        }
-
-        @media (max-width: 768px) {
-            .container {
-                width: 100%;
-            }
+            cursor: pointer;
+            display: none; 
         }
     </style>
 </head>
 <body>
-<div class="container">
-    <h1>
-        欢迎使用 7MA 出行
-    </h1>
-    <div class="announcement">
-    <p>公告：欢迎使用我们的自助服务平台。请按照提示输入单车编号并下单。</p>
-</div>
-    <form action="/process" method="post">
-        <label for="bikeNumber">请输入单车编号：</label>
-        <input type="text" id="bikeNumber" name="bike_number" required>
-        <button type="submit">下单</button>
-    </form>
+    <div id="qr-reader"></div>
+    <button id="torch-button">打开闪光灯</button>
+    <h2>处理结果:</h2>
+    <div id="qr-reader-results">请扫描二维码...</div>
+
+    <script src="https://unpkg.com/html5-qrcode"></script>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", (event) => {
+            const resultsElement = document.getElementById('qr-reader-results');
+            const torchButton = document.getElementById('torch-button');
+            const html5QrCode = new Html5Qrcode("qr-reader");
+
+            // --- 状态变量 ---
+            let isTorchOn = false;
+            // 用于防止重复提交
+            let isProcessing = false; // 是否有请求正在进行
+            let lastProcessedRandnum = null; // 上一个 *成功* 处理的号码
+            let lastSuccessfulResponse = null; // 上一个成功响应，用于显示
+
+            /**
+             * 异步函数：发送 AJAX (POST) 请求到 /process
+             */
+            async function sendBikeNumber(bikeNum) {
+                const url = '/7ma/process';
+                const data = new URLSearchParams();
+                data.append('bike_number', bikeNum);
+
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        body: data,
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        }
+                    });
+
+                    if (response.ok) {
+                        const responseText = await response.text();
+                        resultsElement.innerHTML = `<strong>处理成功 (单号: ${bikeNum}):</strong><br>${responseText}`;
+                        // 记录成功的响应
+                        lastSuccessfulResponse = responseText;
+                    } else {
+                        // 服务器返回错误 (如 404, 500)
+                        resultsElement.textContent = `服务器错误: ${response.status} ${response.statusText}。请重试。`;
+                        // 重置，允许重扫
+                        lastProcessedRandnum = null;
+                        lastSuccessfulResponse = null;
+                    }
+                } catch (error) {
+                    // 网络错误
+                    console.error('Fetch error:', error);
+                    resultsElement.textContent = `网络请求失败: ${error.message}。请检查网络并重试。`;
+                    // 重置，允许重扫
+                    lastProcessedRandnum = null;
+                    lastSuccessfulResponse = null;
+                } finally {
+                    // 无论成功失败，都解除处理中状态
+                    isProcessing = false;
+                }
+            }
 
 
-</div>
+            /**
+             * 成功扫描后的回调
+             */
+            function onScanSuccess(decodedText, decodedResult) {
+                // 如果上一个请求还在处理中，则忽略所有新的扫描
+                if (isProcessing) {
+                    console.log("正在处理上一个请求，请稍候...");
+                    return;
+                }
 
+                let randnum = null;
+                
+                // 1. 尝试解析扫描到的内容是否为URL
+                try {
+                    const url = new URL(decodedText);
+                    
+                    // 2. 检查是否是目标URL
+                    if (url.origin + url.pathname === 'http://www.7mate.cn/app.php') {
+                        // 3. 提取 randnum 参数
+                        randnum = url.searchParams.get('randnum');
+                    }
+                } catch (e) {
+                    // 扫描到的不是一个有效的URL，忽略
+                }
 
+                // 4. 判断是否是我们需要的二维码
+                if (randnum) {
+                    // 5. 检查是否是刚刚成功处理过的同一个号码
+                    if (randnum === lastProcessedRandnum) {
+                        console.log(`重复扫描: ${randnum}，已处理。`);
+                        // (可选) 重新显示上一次的成功结果
+                        resultsElement.innerHTML = `<strong>[已处理: ${randnum}]</strong><br>${lastSuccessfulResponse}`;
+                        return; // 不再重复请求
+                    }
+
+                    // 6. 这是一个新的、有效的号码，开始处理
+                    isProcessing = true;
+                    lastProcessedRandnum = randnum; // 立即设置，防止连续扫描
+                    
+                    resultsElement.innerHTML = `识别成功: <strong>${randnum}</strong><br>正在提交到服务器...`;
+                    
+                    // 7. 调用 AJAX 函数
+                    sendBikeNumber(randnum);
+
+                } else {
+                    // 扫描到了二维码，但不是我们想要的格式
+                    resultsElement.textContent = `扫描到无效二维码。请扫描7mate二维码。`;
+                    // 注意：这里我们 *不* 重置 lastProcessedRandnum
+                    // 这样即使用户扫描了 [A, B, A]，A也只会被提交一次
+                }
+            }
+
+            function onScanFailure(error) {
+                // 忽略，保持持续扫描
+            }
+
+            // --- 闪光灯控制 ---
+            torchButton.addEventListener('click', () => {
+                isTorchOn = !isTorchOn;
+                const constraints = { advanced: [{ torch: isTorchOn }] };
+                html5QrCode.applyVideoConstraints(constraints)
+                    .then(() => {
+                        torchButton.textContent = isTorchOn ? '关闭闪光灯' : '打开闪光灯';
+                    })
+                    .catch(err => {
+                        console.error('切换闪光灯失败:', err);
+                        isTorchOn = !isTorchOn; // 回滚状态
+                    });
+            });
+
+            // --- 启动扫描器 ---
+            const config = { 
+                fps: 10,
+                qrbox: { width: 250, height: 300 }
+            };
+
+            resultsElement.textContent = "正在启动后置摄像头...";
+            
+            html5QrCode.start(
+                { facingMode: "environment" }, config, onScanSuccess, onScanFailure
+            )
+            .then(() => {
+                resultsElement.innerHTML = "摄像头已启动，请扫描 <strong>7mate.cn</strong> 二维码。";
+                // 检查闪光灯能力
+                try {
+                    const capabilities = html5QrCode.getRunningTrackCapabilities();
+                    if (capabilities && capabilities.torch) {
+                        torchButton.style.display = 'block'; // 显示按钮
+                    }
+                } catch (err) { /* 忽略 */ }
+            })
+            .catch((err) => {
+                console.warn(`后置摄像头启动失败: ${err}`);
+                resultsElement.textContent = "后置摄像头失败，尝试默认...";
+                // 尝试默认摄像头
+                html5QrCode.start({ }, config, onScanSuccess, onScanFailure)
+                .then(() => {
+                    resultsElement.innerHTML = "摄像头已启动，请扫描 <strong>7mate.cn</strong> 二维码。";
+                })
+                .catch((err2) => {
+                    resultsElement.textContent = `错误：无法启动摄像头。请确保授予权限并使用 https。`;
+                });
+            });
+        });
+    </script>
 
 </body>
 </html>
