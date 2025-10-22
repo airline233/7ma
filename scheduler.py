@@ -8,7 +8,7 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 
 
-intervalSeconds = 60  # 设置监听的时间间隔，单位为秒
+intervalSeconds = 45  # 设置监听的时间间隔，单位为秒
 # 读取Authorization
 with open('config/Authorization.txt', 'r') as auth_file:
     Authorization = auth_file.read().strip()
@@ -46,9 +46,9 @@ def carBack(encryptedBackType, encryptedActionType, encryptedLockStatus):
     payload = {
         "parking": "",
         "remark": "检测到车锁状态为关",
-        "longitude": "108.892286",
+        "longitude": "118.731455",
         "back_type": encryptedBackType,
-        "latitude": "34.367498",
+        "latitude": "32.210315",
         "action_type": encryptedActionType,
         "lock_status": encryptedLockStatus
     }
