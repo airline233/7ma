@@ -41,13 +41,26 @@ app_logger.addHandler(app_handler)
 with open('config/Authorization.txt', 'r') as auth_file:
     Authorization = auth_file.read().strip()
 
+def plog(detail):
+    app_logger.info(detail)
+    print(f"{datetime.now()}{detail}")
 # 记录上次成功提交订单的时间
 last_successful_order_time = 0
-
+globalHeaders = {
+    "Authorization": Authorization,
+    "Content-Type": "application/json",
+    "client": "Wechat_MiniAPP",
+    "app-version": "1.3.141",
+    "user-agent": "Mozilla/5.0 (Linux; Android 13; Xiaomi M20122011AC) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.141 Mobile Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Android XWEB/16467"
+    }
+    
 def send_request(url, method, body):
     headers = {
         "Authorization": Authorization,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "client": "Wechat_MiniAPP",
+        "app-version": "1.3.141",
+        "user-agent": "Mozilla/5.0 (Linux; Android 13; Xiaomi M20122011AC) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.141 Mobile Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Android XWEB/16467"
     }
     response = requests.request(method, url, headers=headers, json=body)
     return response.json()
@@ -67,7 +80,7 @@ def place_order(bike_number):
     return result
 
 def unlock():
-    url = "https://newmapi.7mate.cn/api/car/unlock"
+    url = "https://newmapi.7mate.cn/api/order/can_action"
     method = "POST"
     body = {
         "latitude": "32.210315",
@@ -75,6 +88,11 @@ def unlock():
         "longitude": "118.731455"
     }
     result = send_request(url, method, body)
+    return result
+
+def lock():
+    url = "https://newmapi.7mate.cn/api/order/can_action"
+    result = requests.get(url, headers=globalHeaders, json=True)
     return result
 
 def md5Hash(text):
@@ -108,15 +126,25 @@ def carBack(encryptedBackType, encryptedActionType, encryptedLockStatus):
     response = requests.post(url2, headers=headers, json=payload)
     return response.json()
 
-def carBack_main():
-    time.sleep(20)
+def carBack_main(action_type='',sleepSeconds=31): #7ma创建订单是扫码后30秒
+    plog("carBack_main...")
+    time.sleep(sleepSeconds)
+    if action_type == 'back':
+        carLockResponse = lock()
+        if(carLockResponse.json().get("status_code","0") == 200):
+            plog(f"--锁车成功")
+        else:
+            plog(f"--锁车失败:{carLockResponse.text}")
+
+    plog(f"--进入还车流程")
     url = "https://newmapi.7mate.cn/api/user/car_authority"
     headers = {"Authorization": Authorization}
 
-    response = requests.get(url, headers=headers, json=True)
+    carAuthResponse = requests.get(url, headers=headers)
 
-    if response.status_code == 200 and response.json().get("data", {}).get("unauthorized_code") == 6:
-        orderSn = response.json().get("data", {}).get("order", {}).get("order_sn")
+    if carAuthResponse.status_code == 200 and carAuthResponse.json().get("data", {}).get("unauthorized_code") == 6:
+        orderSn = carAuthResponse.json().get("data", {}).get("order", {}).get("order_sn")
+        plog(f"--获取订单号成功：{orderSn}")
         if orderSn:
             lockStatus = f"{orderSn}:lock_status:1"
             encryptedLockStatus = md5Hash(lockStatus)
@@ -124,10 +152,17 @@ def carBack_main():
             encryptedActionType = md5Hash(actionType)
             backType = f"{orderSn}:back_type:2"
             encryptedBackType = md5Hash(backType)
-            carBack(encryptedBackType, encryptedActionType, encryptedLockStatus)
-            print(f"{datetime.now()}--当前订单：{orderSn}，还车成功（sleep20）")
-            # 记录还车成功到日志
-            app_logger.info(f"--当前订单：{orderSn}，还车成功（sleep20）")
+            carBackResponse = carBack(encryptedBackType, encryptedActionType, encryptedLockStatus)
+            if(carBackResponse.json().get("status_code",0) == 200):
+                plog(f"--当前订单：{orderSn}，还车成功{carBackResponse.text}")
+            else:
+                plog(f"--当前订单：{orderSn}，还车失败：{carAuthResponse.text} {carBackResponse.text}")
+                carBack_main('',0)
+        else:
+            plog(f"--获取订单号失败{carAuthResponse.text}")
+            carBack_main('',0)
+    else:
+        plog(f"--请求Authority失败{carAuthResponse.text}")
 
 @app.route('/')
 def index():
@@ -147,17 +182,17 @@ def process():
         })
 
     bike_number = request.form.get('bike_number')
-
+    action_type = request.form.get('action_type')
+    
     order_result = place_order(bike_number)
 
     if order_result["status_code"] == 200 and order_result["message"] == "下单成功":
         unlock_result = unlock()
         last_successful_order_time = current_time
         # 记录成功订单到日志
-        app_logger.info(f'--成功订单: bike_number={bike_number}, unlock_result={unlock_result["message"]}')
+        plog(f'--成功订单: bike_number={bike_number}, unlock_result={unlock_result["message"]}')
         
-        
-        task = threading.Thread(target=carBack_main)
+        task = threading.Thread(target=carBack_main, args=(action_type,))
         # 启动线程，这个调用会立即返回
         task.start()
         
@@ -176,6 +211,6 @@ def process():
         })
 
 if __name__ == '__main__':
-    intervalSeconds = 45  # 设置监听的时间间隔，单位为秒
-    start_scheduler()  # 启动定时任务
+    # intervalSeconds = 45  # 设置监听的时间间隔，单位为秒
+    # start_scheduler()  # 启动定时任务
     app.run(host='0.0.0.0', port=4321, debug=True)
